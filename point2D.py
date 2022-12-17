@@ -1,7 +1,7 @@
 import math
 
 class Point2D:  
-    def __init__(self, x, y):
+    def __init__(self, x:float, y:float):
         self.x = x
         self.y = y
 
@@ -21,6 +21,16 @@ class Point2D:
         y = self.y - other.y
         return Point2D(x, y)
     
+    def __eq__(self, other):
+        if (self.x == other.x) and (self.y == other.y):
+            return True
+        return False
+
+    def __ne__(self, other):
+        if self == other:
+            return False
+        return True
+    
     def __mul__ (self, other:float):
         return Point2D(self.x * other, self.y * other)
 
@@ -32,6 +42,6 @@ class Point2D:
         dist = self.distanceFromPoint(self, origin)
         return dist
   
-    def distanceTo(self, point):
-        return  math.sqrt((self.x - point.x)**2 + (self.y - point.y)**2)
+    def distanceTo(self, other):
+        return  math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
     
