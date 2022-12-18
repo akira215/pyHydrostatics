@@ -1,8 +1,99 @@
-
 import math
 from point2D import Point2D
 
-class Polygon:  
+def sign(x:float)->int:
+    '''return 0 if 0.0,-1 for negative values, +1 for positive ones'''
+    if math.isclose( x, 0.0,abs_tol=1e-10):
+        return 0
+    if x > 0:
+        return 1
+    return -1
+
+def nextVertex(n:int,i:int,di:int)->int:
+    ''' return the circular next vertex '''
+    return (i+di)%n
+
+def MtoSegment(P0:Point2D,P1:Point2D,M:Point2D)->float:
+    ''' Compute Lz from Point M relative to segment P0,P1
+    This allow to know from which side from the segment is M and 
+    compare distances of several points to this segment'''
+    return (P1.x-P0.x)*(M.y-P0.y)-(P1.y-P0.y)*(M.x-P0.x)
+
+def IsInTriangle(triangle:list,M:Point2D):
+    '''Return True if M is striclty inside the triangle
+    Triangle points shall be given counterclockwise'''
+    P0 = triangle[0]
+    P1 = triangle[1]
+    P2 = triangle[2]
+    return MtoSegment(P0,P1,M) > 0 and MtoSegment(P1,P2,M) > 0 and MtoSegment(P2,P0,M) > 0
+
+def farthestVertex(polygon:list,P0:Point2D,P1:Point2D,P2:Point2D,indices)->int:
+    '''Return the indice of the polygon vertex from triangle P0,P1,P2 
+    which is the farthest from segment P1,P2'''
+    n = len(polygon)
+    distance = 0.0
+    j = None
+    for i in range(n):
+        if not(i in indices):
+            M = polygon[i]
+            if IsInTriangle([P0,P1,P2],M):
+                d = abs(MtoSegment(P1,P2,M))
+                if d > distance:
+                    distance = d
+                    j = i
+    return j
+
+def mostLeftVertex(polygon:list)->int:
+    '''Return the indice of the vertex the most on the left of the polygon.
+    If more than one vertice have the same abscisse, any of them could be return'''
+    n = len(polygon)
+    x = polygon[0].x
+    j = 0
+    for i in range(1,n):
+        if polygon[i].x < x:
+            x = polygon[i].x
+            j = i
+    return j
+
+def newPolygon(polygon:list,start:int,end:int)->list:
+    ''' Generate a polygone from indice start to end, 
+    considering the cyclic condition'''
+    n = len(polygon)
+    p = []
+    i = start
+    while i!=end:
+        p.append(polygon[i])
+        i = nextVertex(n,i,1)
+    p.append(polygon[end])
+    return p
+
+def computeInter(edge:list,line:list)->Point2D:
+    '''Compute Intersection with a segment'''
+    ptA = edge[0]
+    ptB = edge[1]
+    ptC = line[0]
+    ptD = line[1]
+
+    vAB = ptB - ptA
+    vWL = ptD - ptC
+    div = vAB.x * vWL.y - vAB.y * vWL.x
+    m = 0.0
+    k = 0.0
+    if (div != 0):
+        m = (vAB.x * ptA.y - vAB.x * ptC.y - vAB.y * ptA.x + vAB.y * ptC.x ) / div
+        k = (vWL.x * ptA.y - vWL.x * ptC.y - vWL.y * ptA.x + vWL.y * ptC.x ) / div
+        if (0.0<=m) and (m<1) and (0<=k) and (k<1):
+            #there is an intersection
+            ptInt = ptA +  vAB * k
+            return ptInt
+    #No intersection
+    return None
+
+
+class Polygon:
+    ''' Object to compute areas, cog and splitting, 
+    by triangulating the polygon. This one will be counterclockwie
+    oriented as soon as computation will be required'''
     def __init__(self, vertices:list):
         self.vertices = vertices
         self.trianglesList = []
@@ -29,79 +120,21 @@ class Polygon:
     def __repr__(self):
         return str(self)
 
-    @staticmethod
-    def __next_vertex(n:int,i:int,di:int)->int:
-        ''' return the circular next vertex '''
-        return (i+di)%n
-
-    @staticmethod
-    def __MtoSegment(P0:Point2D,P1:Point2D,M:Point2D)->float:
-        ''' Compute Lz from Point M relative to segment P0,P1
-        This allow to know from which side from the segment is M and 
-        compare distances of several points to this segment'''
-        return (P1.x-P0.x)*(M.y-P0.y)-(P1.y-P0.y)*(M.x-P0.x)
-
-    def __IsInTriangle(self,triangle:list,M:Point2D):
-        '''Return True if M is striclty inside the triangle
-        Triangle points shall be given counterclockwise'''
-        P0 = triangle[0]
-        P1 = triangle[1]
-        P2 = triangle[2]
-        return self.__MtoSegment(P0,P1,M) > 0 and self.__MtoSegment(P1,P2,M) > 0 and self.__MtoSegment(P2,P0,M) > 0
-
-    def __farthestVertex(self,polygon:list,P0:Point2D,P1:Point2D,P2:Point2D,indices)->int:
-        '''Return the indice of the polygon vertex from triangle P0,P1,P2 which is the farthest from segment P1,P2'''
-        n = len(polygon)
-        distance = 0.0
-        j = None
-        for i in range(n):
-            if not(i in indices):
-                M = polygon[i]
-                if self.__IsInTriangle([P0,P1,P2],M):
-                    d = abs(self.__MtoSegment(P1,P2,M))
-                    if d > distance:
-                        distance = d
-                        j = i
-        return j
-
-    def __MostLeftVertex(self,polygon:list)->int:
-        '''Return the indice of the vertex the most on the left of the polygon. If more than one
-        vertice have the same abscisse, any of them could be return'''
-        n = len(polygon)
-        x = polygon[0].x
-        j = 0
-        for i in range(1,n):
-            if polygon[i].x < x:
-                x = polygon[i].x
-                j = i
-        return j
-
-    def __NewPolygon(self,polygon:list,start:int,end:int)->list:
-        ''' Generate a polygone from indice start to end, concidering the cyclic condition'''
-        n = len(polygon)
-        p = []
-        i = start
-        while i!=end:
-            p.append(polygon[i])
-            i = self.__next_vertex(n,i,1)
-        p.append(polygon[end])
-        return p
-
     def __triangulate_polygon_recursive(self,polygon:list,trianglesList:list)->list:
         '''Recursive function to divide polygone in 2 parts, starting by the most left vertex
         call recursively new polygones until getting triangles, and fill the triangle list'''
         n = len(polygon)
         
-        j0 = self.__MostLeftVertex(polygon)
-        j1 = self.__next_vertex(n,j0,1)
-        j2 = self.__next_vertex(n,j0,-1)
+        j0 = mostLeftVertex(polygon)
+        j1 = nextVertex(n,j0,1)
+        j2 = nextVertex(n,j0,-1)
         P0 = polygon[j0]
         P1 = polygon[j1]
         P2 = polygon[j2]
-        j = self.__farthestVertex(polygon,P0,P1,P2,[j0,j1,j2])
+        j = farthestVertex(polygon,P0,P1,P2,[j0,j1,j2])
         if j==None:
             trianglesList.append([P0,P1,P2])
-            polygon_1=self.__NewPolygon(polygon,j1,j2)
+            polygon_1=newPolygon(polygon,j1,j2)
             if len(polygon_1)==3:
                 trianglesList.append(polygon_1)
             elif len(polygon_1)==2:
@@ -110,8 +143,8 @@ class Polygon:
             else:
                 self.__triangulate_polygon_recursive(polygon_1,trianglesList)
         else:
-            polygon_1 = self.__NewPolygon(polygon,j0,j)
-            polygon_2 = self.__NewPolygon(polygon,j,j0)
+            polygon_1 = newPolygon(polygon,j0,j)
+            polygon_2 = newPolygon(polygon,j,j0)
             if len(polygon_1)==3:
                 trianglesList.append(polygon_1)
             else:
@@ -188,11 +221,11 @@ class Polygon:
                     y = self.vertices[i].y
                     index = i
         
-        A = self.vertices[self.__next_vertex(n,index,-1)]
+        A = self.vertices[nextVertex(n,index,-1)]
         B = self.vertices[index]
-        C = self.vertices[self.__next_vertex(n,index,+1)]
+        C = self.vertices[nextVertex(n,index,+1)]
 
-        return self.__sign((B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y))
+        return sign((B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y))
     
     def safeOrder(self):
         '''Arrange the list counterclockwise for safe triangulation operations'''
@@ -206,38 +239,7 @@ class Polygon:
 
     
     '''******************* Intersection s******************************************'''
-    @staticmethod
-    def __computeInter(edge:list,line:list)->Point2D:
-        """Compute Intersection with a segment"""
-        ptA = edge[0]
-        ptB = edge[1]
-        ptC = line[0]
-        ptD = line[1]
-
-        vAB = ptB - ptA
-        vWL = ptD - ptC
-        div = vAB.x * vWL.y - vAB.y * vWL.x
-        m = 0.0
-        k = 0.0
-        if (div != 0):
-            m = (vAB.x * ptA.y - vAB.x * ptC.y - vAB.y * ptA.x + vAB.y * ptC.x ) / div
-            k = (vWL.x * ptA.y - vWL.x * ptC.y - vWL.y * ptA.x + vWL.y * ptC.x ) / div
-            if (0.0<=m) and (m<1) and (0<=k) and (k<1):
-                #there is an intersection
-                ptInt = ptA +  vAB * k
-                return ptInt
-        #No intersection
-        return None
-
-    @staticmethod
-    def __sign(x:float)->int:
-        if math.isclose( x, 0.0,abs_tol=1e-10):
-            return 0
-        if x > 0:
-            return 1
-        return -1
-
-
+   
     def __SplitEdges(self,line:list):
         self.splitPoly =[]
         self.intersections = []
@@ -245,10 +247,10 @@ class Polygon:
         o = 0
         for i in range(n):
             startPt = self.vertices[i]
-            endPt = self.vertices[self.__next_vertex(n,i,1)]
+            endPt = self.vertices[nextVertex(n,i,1)]
             #(-) right side (+) left side (0) from the line
-            edgeStartSide = self.__sign(self.__MtoSegment(line[0],line[1],startPt))
-            edgeEndSide = self.__sign(self.__MtoSegment(line[0],line[1],endPt))
+            edgeStartSide = sign(MtoSegment(line[0],line[1],startPt))
+            edgeEndSide = sign(MtoSegment(line[0],line[1],endPt))
 
             self.splitPoly.append({'v':startPt, 'side':edgeStartSide, 'dist':0.0, 'next':0,'prev':0,'x':0})
 
@@ -258,7 +260,7 @@ class Polygon:
             else:
                 if edgeStartSide * edgeEndSide < 0.0:
                     #edge crossing the split line
-                    interPt = self.__computeInter([startPt,endPt],line)
+                    interPt = computeInter([startPt,endPt],line)
                     #TODO: check is is None ?
                     o += 1
 
@@ -268,8 +270,8 @@ class Polygon:
         #Connect the double linked list
         n = len(self.splitPoly)
         for i in range(n):
-            self.splitPoly[i]['next'] = self.__next_vertex(n,i,+1)
-            self.splitPoly[i]['prev'] = self.__next_vertex(n,i,-1)
+            self.splitPoly[i]['next'] = nextVertex(n,i,+1)
+            self.splitPoly[i]['prev'] = nextVertex(n,i,-1)
                     
         return 
     
@@ -395,11 +397,11 @@ class Polygon:
         self.__SplitEdges(line)
         self.__SortIntersections(line)
         self.__SplitPolygon()
-        return self.__CollectPolys()
+        return {'pList':self.__CollectPolys(),'edges':self.edges}
 
     def getPolygonsFromSide(self,line:list,side:int):
         '''return a list of poly cutted with the line on the selected side (-1:right or +1:left) of the line'''
-        polyList = self.splitPolygon(line)
+        polyList = self.splitPolygon(line)['pList']
         polyFromSide = []
 
         #check if the polygon is on right side
@@ -408,7 +410,7 @@ class Polygon:
             l = len(p)
             finished = False
             while (i < l) and not finished:
-                s = self.__sign(self.__MtoSegment(line[0],line[1],p[i]))
+                s = sign(MtoSegment(line[0],line[1],p[i]))
                 if s !=0: #is side == 0 the vertex is on the line
                     finished = True
                     if s == side:
@@ -416,8 +418,7 @@ class Polygon:
                 else: # s == 0 the vertex is on the line
                     i+=1
 
-        
-        return polyFromSide
+        return {'pList':polyFromSide,'edges':self.edges}
 
 
     def getArea(self)->float:
@@ -433,12 +434,19 @@ class Polygon:
 
 class Polygons:
     '''Class to deal with multiples polygons'''
-    def __init__(self, polygonList:list):
+    def __init__(self, cuttedPoly:dict = None, pList:list = None):
             self.p_list = []
-            for p in polygonList:
-                self.p_list.append(Polygon(p))
+            self.edges = []
             self.area = None
             self.cog = None
+            if not (pList is None):
+                for p in pList:
+                    self.p_list.append(Polygon(p))
+            elif not (cuttedPoly is None):
+                for p in cuttedPoly['pList']:
+                    self.p_list.append(Polygon(p))
+                self.edges = list(cuttedPoly['edges'])
+           
 
     def __str__(self):
         strPoly = 'Polygons['
@@ -517,7 +525,7 @@ pSide = Polygons(p.getPolygonsFromSide(l,1))
 print('getfromside',pSide)
 print ('areaTotal',pSide.getArea())
 print ('CoG total',pSide.getCog())
-print ('cutted edges',p.edges)
+print ('cutted edges',pSide.edges)
 print('***************************')
 print ('poly',p)
 print ('poly safe',p)
