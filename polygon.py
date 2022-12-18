@@ -10,10 +10,12 @@ class Polygon:
         self.perimeter = None
         self.cog = None
         self.splitPoly = None
-        self.intersections = None
+        self.intersections = None 
+        self.edges = None #list of segment of the cutting line
+        self.isCounterClockwise = False
     
     def __str__(self):
-        strPoly = '['
+        strPoly = 'Polygon['
         first = True
         for p in self.vertices:
             if first:
@@ -75,7 +77,7 @@ class Polygon:
         return j
 
     def __NewPolygon(self,polygon:list,start:int,end:int)->list:
-        ''' Generate a polygone frrom indice start to end, concidering the cyclic condition'''
+        ''' Generate a polygone from indice start to end, concidering the cyclic condition'''
         n = len(polygon)
         p = []
         i = start
@@ -102,6 +104,9 @@ class Polygon:
             polygon_1=self.__NewPolygon(polygon,j1,j2)
             if len(polygon_1)==3:
                 trianglesList.append(polygon_1)
+            elif len(polygon_1)==2:
+                #the polygon was a triangle not more to do
+                return trianglesList
             else:
                 self.__triangulate_polygon_recursive(polygon_1,trianglesList)
         else:
@@ -133,29 +138,74 @@ class Polygon:
     
     def __compute(self):
         '''Compute the area of the triangulated polygone'''
+
         if self.area == None:
-            area = 0
-            Mx = 0
-            My = 0
+            self.safeOrder()
+            area = 0.0
+            Mx = 0.0
+            My = 0.0
             self.triangulate_polygon()
             for triangle in self.trianglesList:
-                xcog_tr = 0
-                ycog_tr = 0
-                area_tr = 0
+                xcog_tr = 0.0
+                ycog_tr = 0.0
+                area_tr = 0.0
                 for pt in triangle:
                     xcog_tr += pt.x
                     ycog_tr += pt.y
                 
                 area_tr = self.__triangleArea(triangle)
-                Mx += xcog_tr / 3 * area_tr
-                My += ycog_tr / 3 * area_tr
+                Mx += xcog_tr / 3.0 * area_tr
+                My += ycog_tr / 3.0 * area_tr
 
                 area += area_tr
 
             self.area = abs(area)
             self.cog = Point2D(Mx/area,My/area)
+
+    '''******************* Ordering ******************************************'''
+
+    def __checkPolyOrientation(self)->int:
+        '''Return +1 for counterclockwise -1 for clockwise'''
+        
+        '''find the lowest point at left side to check the angle'''
+        shortList = [0]
+        n = len(self.vertices)
+        x = self.vertices[0].x
+        
+        index = 0
+        for i in range(1,n):
+            if math.isclose(self.vertices[i].x,x):
+                shortList.append(i)
+            elif self.vertices[i].x < x:
+                x = self.vertices[i].x
+                shortList =[]
+                index = i
+        
+        if len(shortList):
+            y = self.vertices[shortList[0]].y
+            for i in shortList:
+                if self.vertices[i].y < y:
+                    y = self.vertices[i].y
+                    index = i
+        
+        A = self.vertices[self.__next_vertex(n,index,-1)]
+        B = self.vertices[index]
+        C = self.vertices[self.__next_vertex(n,index,+1)]
+
+        return self.__sign((B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y))
     
-    '''*******************Intersections******************************************'''
+    def safeOrder(self):
+        '''Arrange the list counterclockwise for safe triangulation operations'''
+        if self.isCounterClockwise:
+            return
+        
+        if self.__checkPolyOrientation() == -1:
+            self.vertices.reverse()
+        
+        self.isCounterClockwise
+
+    
+    '''******************* Intersection s******************************************'''
     @staticmethod
     def __computeInter(edge:list,line:list)->Point2D:
         """Compute Intersection with a segment"""
@@ -181,7 +231,7 @@ class Polygon:
 
     @staticmethod
     def __sign(x:float)->int:
-        if math.isclose(x,0):
+        if math.isclose( x, 0.0,abs_tol=1e-10):
             return 0
         if x > 0:
             return 1
@@ -235,16 +285,12 @@ class Polygon:
         
         self.intersections.sort(key=distanceFromFirst)
 
-        #splitData['intersections'].sort(key=distanceFromFirst)
-
-        #for i in splitData['intersections']:
         for i in  self.intersections:
-            #splitData['splitPoly'][i]['dist'] = distanceFromFirst(i)
             self.splitPoly[i]['dist'] = distanceFromFirst(i)
 
         return
 
-    def __createEdges(self,srcPt,destPt,splitPoly):
+    def __createEdges(self,srcPt,destPt):
         '''create new corresponding edge'''
         self.splitPoly.append(dict(self.splitPoly[srcPt]))
         a=len(self.splitPoly) - 1
@@ -264,7 +310,7 @@ class Polygon:
             
     def __SplitPolygon(self):
         '''Split polygon creating new edges'''
- 
+        self.edges = []
         useSrc = None
         l = len(self.intersections)
         i = 0
@@ -312,7 +358,9 @@ class Polygon:
                             
             if not((srcPt is None) or (destPt is None)):
                 #Bridge source and destination
-                self.__createEdges(srcPt,destPt,self.splitPoly)
+                self.edges.append([self.splitPoly[srcPt]['v'],self.splitPoly[destPt]['v']])
+                self.__createEdges(srcPt,destPt)
+
 
                 #Is it a config in which a vertex needs to be reused as source vertex ?
                 if self.splitPoly[self.splitPoly[self.splitPoly[srcPt]['prev']]['prev']]['side'] == +1 :
@@ -343,10 +391,33 @@ class Polygon:
         return resPolys
 
     def splitPolygon(self,line:list):
+        self.safeOrder()
         self.__SplitEdges(line)
         self.__SortIntersections(line)
         self.__SplitPolygon()
         return self.__CollectPolys()
+
+    def getPolygonsFromSide(self,line:list,side:int):
+        '''return a list of poly cutted with the line on the selected side (-1:right or +1:left) of the line'''
+        polyList = self.splitPolygon(line)
+        polyFromSide = []
+
+        #check if the polygon is on right side
+        for p in polyList:
+            i = 0
+            l = len(p)
+            finished = False
+            while (i < l) and not finished:
+                s = self.__sign(self.__MtoSegment(line[0],line[1],p[i]))
+                if s !=0: #is side == 0 the vertex is on the line
+                    finished = True
+                    if s == side:
+                        polyFromSide.append(p)
+                else: # s == 0 the vertex is on the line
+                    i+=1
+
+        
+        return polyFromSide
 
 
     def getArea(self)->float:
@@ -360,17 +431,73 @@ class Polygon:
         return self.cog
 
 
+class Polygons:
+    '''Class to deal with multiples polygons'''
+    def __init__(self, polygonList:list):
+            self.p_list = []
+            for p in polygonList:
+                self.p_list.append(Polygon(p))
+            self.area = None
+            self.cog = None
+
+    def __str__(self):
+        strPoly = 'Polygons['
+        first = True
+        for p in self.p_list:
+            if first:
+                first = False
+            else:
+               strPoly +=', '     
+            strPoly += str(p)
+        strPoly +=']' 
+        return strPoly
+
+    def __repr__(self):
+        return str(self)
+
+    def __compute(self):
+        if self.area == None:
+            self.area = 0.0
+            Mx=0.0
+            My=0.0
+            for p in self.p_list:
+                self.area += p.getArea()
+                Mx += p.cog.x * p.getArea()
+                My += p.cog.y * p.getArea()
+            
+            self.cog = Point2D(Mx /self.area, My /self.area)
+
+    
+    def getArea(self)->float:
+        '''Compute the area of the triangulated polygone'''
+        self.__compute()
+        return self.area
+    
+    def getCog(self)->float:
+        '''Compute the area of the triangulated polygone'''
+        self.__compute()
+        return self.cog
+
+    
 
 polygoneInit = [Point2D(0,0),Point2D(0.5,-1),Point2D(1.5,-0.2),Point2D(2,-0.5),Point2D(2,0),Point2D(1.5,1),Point2D(0.3,0),Point2D(0.5,1)]
 
-polygoneClockwise = [Point2D(0,0),Point2D(0.5,1),Point2D(0.3,0),Point2D(1.5,1),Point2D(2,0),Point2D(2,-0.5),Point2D(1.5,-0.2),Point2D(0.5,-1)]
+#polygoneClockwise
+polygoneTest = [Point2D(0.0,0.0),Point2D(0.5,1.0),Point2D(0.3,0.0),Point2D(1.5,1.0),Point2D(2.0,0.0),Point2D(2.0,-0.5),Point2D(1.5,-0.2),Point2D(0.5,-1.0)]
 
-polygoneSesor = [Point2D(2,-0.5),Point2D(2,0),Point2D(1.5,1),Point2D(0.3,0),Point2D(0.5,1),Point2D(0,0),Point2D(0.5,-1),Point2D(1.5,-0.2)]
+#shifted
+polygoneTest = [Point2D(2,-0.5),Point2D(2,0),Point2D(1.5,1),Point2D(0.3,0),Point2D(0.5,1),Point2D(0,0),Point2D(0.5,-1),Point2D(1.5,-0.2)]
 
-polygoneCarre = [Point2D(0,0.0),Point2D(2,0),Point2D(2,2),Point2D(0,2)]
+#carre
+#polygoneTest = [Point2D(0,0.0),Point2D(2,0),Point2D(2,2),Point2D(0,2)]
 
-polygoneTest = [Point2D(0,0),Point2D(0.5,-1),Point2D(1.5,-0.2),Point2D(2,-0.5),Point2D(2,0),Point2D(1.5,1),Point2D(0.3,0.0),Point2D(0.5,1)]
+#carre clockwise
+#polygoneTest = [Point2D(0.0,0.0),Point2D(2,0),Point2D(2,-2.0),Point2D(0,-2.0)]
 
+#Intial
+#polygoneTest = [Point2D(0,0),Point2D(0.0,-1),Point2D(1.5,-0.2),Point2D(2,-0.5),Point2D(2,0),Point2D(1.5,1),Point2D(0.3,0.0),Point2D(0.5,1)]
+
+#initial with only one cut
 #polygoneTest = [Point2D(0,0),Point2D(0.5,-1),Point2D(1.5,-0.2),Point2D(2,-0.5),Point2D(2,0),Point2D(1.5,0),Point2D(0.3,0.2),Point2D(0.5,1)]
 
 l = [Point2D(-0.5,0.6),Point2D(2.7,-0.75)]
@@ -380,8 +507,18 @@ print ('list',p.triangulate_polygon())
 print ('area',p.getArea())
 print ('CoG',p.getCog())
 print ('poly',p)
-
+#print('split',p.splitPolygon(l))
+polytotal = Polygons(p.splitPolygon(l))
+print ('areaTotal',polytotal.getArea())
+print ('CoG total',polytotal.getCog())
+print ('cutted edges',p.edges)
+print('********Polyfromside**************')
+pSide = Polygons(p.getPolygonsFromSide(l,1))
+print('getfromside',pSide)
+print ('areaTotal',pSide.getArea())
+print ('CoG total',pSide.getCog())
+print ('cutted edges',p.edges)
 print('***************************')
-print(p.splitPolygon(l))
-
+print ('poly',p)
+print ('poly safe',p)
 
