@@ -12,6 +12,7 @@ import math
 import os
 
 from point2D import Point2D
+from polygon import Polygon,Polygons
 
 '''***************** Excel Interface ****************'''
 
@@ -39,12 +40,18 @@ def loadSectionFromTable(ws:Worksheet, tb:Table)->dict:
             table[row_cells[nX].value] = [Point2D(row_cells[nY].value,row_cells[nZ].value)]
         else:
             table[row_cells[nX].value].append(Point2D(row_cells[nY].value,row_cells[nZ].value))
-
+    
     return table    
 
-def getNamedRangeValue(wb:Workbook, rangeName:str):
-    """Return the last value of a named range"""
+def getNamedRangeValue(wb:Workbook, rangeName:str,defaultValue = 0.5):
+    '''Return the last value of a named range'''
     value = None
+    try:
+        dests = wb.defined_names[rangeName].destinations
+    except KeyError:
+        print(rangeName,'is not defined in the workbook, using fallback value:',defaultValue)
+        return defaultValue
+
     dests = wb.defined_names[rangeName].destinations
     for sheet, coord in dests:
         value = wb[sheet][coord].value
@@ -124,6 +131,13 @@ def getAvailableFilename(f:str) -> str:
 
 def loadFromExcel(filename)->dict:
     print ('Loading datas from',filename)
+    global hullDatas
+    global maxWl
+    global deltaWl
+    global maxAngle
+    global deltaAngle
+    global d_sw
+    global minMax 
 
     wb = load_workbook(filename, data_only=True)
 
@@ -132,13 +146,14 @@ def loadFromExcel(filename)->dict:
     tblHullForm = wsInput.tables["tbl_Hullform"]
 
     hullDatas = loadSectionFromTable(wsInput, tblHullForm)
+    minMax = getHullMinMax()
 
     #Read constant values in excel file
-    maxWl = getNamedRangeValue(wb,'max_wl')
-    deltaWl = getNamedRangeValue(wb,'Δwl')
-    maxAngle = getNamedRangeValue(wb,'φMax')
-    deltaAngle = getNamedRangeValue(wb,'Δφ')
-    d_sw = getNamedRangeValue(wb,'ρsw')
+    maxWl = getNamedRangeValue(wb,'max_wl',2.0)
+    deltaWl = getNamedRangeValue(wb,'Δwl',0.01)
+    maxAngle = getNamedRangeValue(wb,'φMax',60.0)
+    deltaAngle = getNamedRangeValue(wb,'Δφ',5.0)
+    d_sw = getNamedRangeValue(wb,'ρsw',1.025)
 
     wb.close()
 
@@ -174,9 +189,6 @@ def computeInter(segment:list, hydroCondition:dict)->Point2D:
     ptC = Point2D(0,hydroCondition['waterline'])
     xD = max(ptA.x,ptB.x)+1 #TODO : xD = 0 ?????
     ptD = Point2D(xD,hydroCondition['waterline'] + xD * math.tan(hydroCondition['Phi'] * math.pi / 180) )
-
-    if (abs(hydroCondition['Phi']) < 13.0):
-        print('ABCD',ptA,ptB,ptC,ptD)
 
     vAB = ptB - ptA
     vWL = ptD - ptC
@@ -220,47 +232,51 @@ def segmentList(section:list)->list:
     for a,b in zip(section[:-1],section[1:]):
         segList.append([a,b])
     return segList
+    
+def getHullMinMax()->dict:
+    xmin = None
+    xmax = None
+    ymin = None
+    ymax = None
+
+    for section in hullDatas.values():
+        #get x min max of the section
+        for p in section:
+            if xmin == None:
+                xmin = p.x
+            elif p.x < xmin:
+                xmin = p.x
+            if xmax == None:
+                xmax = p.x
+            elif p.x > xmax:
+                xmax = p.x
+            if ymin == None:
+                ymin = p.y
+            elif p.y < ymin:
+                ymin = p.y
+            if ymax == None:
+                ymax = p.y
+            elif p.y > ymax:
+                ymax = p.y
+    
+    return {'xmin': xmin, 'xmax': xmax, 'ymin': ymin, 'ymax':ymax }
 
 
 
-def computeZc(section:list, hydroCondition:dict)->dict:
-    """Compute Zc and area below wl for a given Hull section."""
-    trapezeList=[]
-    waterHalfWidth = 0.0
-    for segment in segmentList(section):
-        if (min(segment[0].y,segment[1].y)<hydroCondition['waterline'])and not math.isclose(min(segment[0].y,segment[1].y),hydroCondition['waterline']):
-            ptInt = computeInter(segment, hydroCondition)
-            if not (ptInt is None):
-                if math.isclose(waterHalfWidth,0):
-                    waterHalfWidth = ptInt.x
-                else:
-                    waterHalfWidth = ptInt.x - waterHalfWidth
-                if (segment[0].y<ptInt.y) or math.isclose(segment[0].y,ptInt.y):
-                    trapezeList.append([segment[0], ptInt])
-                else:
-                    trapezeList.append([ptInt, segment[1]])
-            else:
-                trapezeList.append(segment)
+def computeSectionHydro(section:list, wl:list)->dict:
+    '''Compute Zc and area below wl for a given Hull section.'''
+   
+    pSection = Polygon(section)
+    #get polygon right side (-1) of the waterline
+    pSide = Polygons(pSection.getPolygonsFromSide(wl,-1))
 
-    Area = 0.0
-    Mz = 0.0
-    Zc = 0.0
-    for segment in trapezeList:
-        datas = computeZandS(segment, hydroCondition)
-        Area += datas['Area']
-        Mz += datas['Area'] * datas['Zcog']
-
-    if not math.isclose(Area,0.0):
-        Zc = Mz / Area
-
-    return {'Zc':Zc,'Area':Area, 'WaterHalfWidth':waterHalfWidth}
+    return {'sCoB':pSide.getCog(),'sArea':pSide.getArea(), 'sWaterIntersection':pSide.getEdges()}
 
     
-    
-def computeCenterOfBuyoancy(hull:dict,wl:float,d_sw:float)->dict:
-    """Compute VCB and Volume below wl for a given Waterline."""
-    hydroCondition = {'waterline':wl,'Phi':0.0}
+def computeCenterOfBuyoancy(wl:list)->dict:
+    '''Compute VCB and Volume below wl for a given Waterline (list of 2 points from left to right).'''
     Mx = 0.0
+    My = 0.0
     Mz = 0.0
     Volume = 0.0
     WaterplaneArea = 0.0
@@ -269,24 +285,39 @@ def computeCenterOfBuyoancy(hull:dict,wl:float,d_sw:float)->dict:
     Lpp = 0.0
     nLCF =0
     LCF = 0.0
-    for index, x in enumerate(hull):
-        #the length of the last element will be the same as the n-1 one
-        if index < (len(hull) - 1):
-            elmntLength = list(hull)[index+1] - list(hull)[index]
-        
-        datas = computeZc(hull[x],hydroCondition)
+    x_section = list(hullDatas)
+    waterlineAt0 = (wl[1].x * wl[0].y - wl[0].x * wl[1].y) / (wl[1].x  - wl[0].x)
+    for index, x in enumerate(hullDatas):
 
-        eltVolume = datas['Area'] * elmntLength
-        xelt = list(hull)[index] + elmntLength / 2
+        #the length of the last element will be the same as the n-1 one
+        if index < (len(hullDatas) - 1):
+            elmntLength = x_section[index+1] - x_section[index]
+        
+        datas = computeSectionHydro(hullDatas[x],wl)
+
+        eltVolume = datas['sArea'] * elmntLength
+        xelt = x_section[index] + elmntLength / 2
         Mx += xelt *  eltVolume
-        Mz += datas['Zc'] * eltVolume
+        My += datas['sCoB'].x *  eltVolume
+        Mz += datas['sCoB'].y * eltVolume
         Volume += eltVolume
-        WaterplaneArea += datas['WaterHalfWidth'] * 2 * elmntLength
-        RMT += elmntLength * (2 * datas['WaterHalfWidth'])**3 /12 # TODO:This computation don't work for a catamaran (should transport this result)
-        RML += (2 * datas['WaterHalfWidth']) * elmntLength**3  /12 + ((2 * datas['WaterHalfWidth']) * elmntLength) * xelt**2 # RML at x=0
         Lpp += elmntLength
 
-        if not math.isclose(datas['WaterHalfWidth'],0):
+        #Compute for eache edge of the waterline cut the length and the inertia
+        inter_length = 0.0
+        for s in datas['sWaterIntersection']:
+            inter_length += s[0].distanceTo(s[1])
+            midSectionPt = Point2D((s[0].x + s[1].x) /2 ,(s[0].y + s[1].y) /2 )
+            dt = midSectionPt.distanceTo(Point2D(0.0,waterlineAt0)) #transport the inertia at x = 0 waterline
+            RMT += elmntLength * inter_length**3 /12 + (inter_length * elmntLength) * dt**2# TODO:This computation don't work for a catamaran (should transport this result)
+        
+        RML += inter_length * elmntLength**3  /12 + (inter_length * elmntLength) * xelt**2 # RML at x=0
+
+        WaterplaneArea += inter_length * elmntLength
+        #RMT += elmntLength * (2 * datas['WaterHalfWidth'])**3 /12 # TODO:This computation don't work for a catamaran (should transport this result)
+        #RML += (2 * datas['WaterHalfWidth']) * elmntLength**3  /12 + ((2 * datas['WaterHalfWidth']) * elmntLength) * xelt**2 # RML at x=0
+
+        if not math.isclose(datas['sArea'],0.0):
             #part of this section is underwater
             if nLCF==0: 
                 LCF += x
@@ -297,28 +328,63 @@ def computeCenterOfBuyoancy(hull:dict,wl:float,d_sw:float)->dict:
     
     LCF /= nLCF
     LCB = Mx / Volume
+    TCB = My / Volume
     VCB = Mz / Volume
-    Volume *=2 #half section given
+    #Volume *=2 #half section given
     Displacement = Volume * d_sw
     Immersion =  WaterplaneArea * d_sw / 100 #in t/cm
+    RMT -= WaterplaneArea * TCB**2 #transport RMT to CoB
     RMT /= Displacement
     RML -= WaterplaneArea * LCB**2 #transport RML to CoB
     RML /= Displacement
     MCT = Displacement * RML / (100*Lpp)
     KMT = RMT + VCB
-    return {'waterline' : wl,'Volume': Volume,'Displacement': Displacement,'Immersion': Immersion,'MCT': MCT,'LCB':LCB,'TCB':0.0, 'LCF': LCF,'KMT': KMT,
+    return {'waterline' : waterlineAt0,'Volume': Volume,'Displacement': Displacement,'Immersion': Immersion,
+            'MCT': MCT,'LCB':LCB,'TCB':TCB, 'LCF': LCF,'KMT': KMT,
             'WaterplaneArea': WaterplaneArea,'RMT': RMT,'RML': RML,'Lpp': Lpp,'VCB':VCB}
 
 
-def computeHydroTable(hull:dict,deltaWl:float,maxWl:float,d_sw:float):
-    """Compute Volume, LCB, VCB for each waterline step.Return a list of dict"""
+def computeHydroTable():
+    '''Compute Volume, LCB, VCB for each waterline step.Return a list of dict'''
     Hydrotable =[]
     wl = deltaWl
-    while wl <= maxWl:
-        Hydrotable.append(computeCenterOfBuyoancy(hull,wl,d_sw))
-        wl += deltaWl
-        
 
+    while (wl < maxWl) and not math.isclose(wl , maxWl):
+        #waterline form left to right
+        waterline = [Point2D(minMax['xmin']-1,wl),Point2D(minMax['xmax']+1,wl)]
+        Hydrotable.append(computeCenterOfBuyoancy(waterline))
+        wl += deltaWl
+    
+    return Hydrotable
+
+def computeHydroAtAngle(hydrotable:list,phi:float):
+    '''Compute Volume, LCB, VCB for each waterline step.Return a list of dict'''
+    Hydrotable =[]
+    wl = deltaWl
+    first = True
+    finished = False
+    tanPhi = math.tan(phi * math.pi/180)
+    startPt = Point2D(minMax['xmin']-1,-(minMax['xmax']-minMax['xmin']+1) * tanPhi)
+    endPt = Point2D(minMax['xmax']+1,tanPhi)
+    #loop throught the waterline, finished when waterplane is null
+    while not finished:
+        #waterline form left to right
+        #print i/len(some_list)*100," percent complete         \r",
+        startPt.y += deltaWl
+        endPt.y += deltaWl
+        waterline = [startPt,endPt]
+        res = {'Phi':phi}
+        res.update(computeCenterOfBuyoancy(waterline))
+        if math.isclose(res['WaterplaneArea'],0.0):
+            if not first:
+                finished = True
+        else:
+            first = False
+            Hydrotable.append(res)
+
+        #Hydrotable.append(computeCenterOfBuyoancy(waterline))
+        wl += deltaWl
+    
     return Hydrotable
 
 def computeDist(section:list, hydroCondition:dict)->float:
@@ -329,8 +395,6 @@ def computeDist(section:list, hydroCondition:dict)->float:
     for segment in segmentList(section):
         ptInter = computeInter(segment, hydroCondition)
 
-        if (abs(hydroCondition['Phi']) < 13.0):
-            print('hydroCondition',hydroCondition,'Inter',ptInter)
 
         if not (ptInter is None):
             distMax = max(A.distanceTo(ptInter),distMax)
@@ -338,8 +402,8 @@ def computeDist(section:list, hydroCondition:dict)->float:
     return distMax
 
 
-def computeKNatAngle(hull:dict,hydrotable:list,angle:float)->list:
-    """Compute C0C1, d, Hmeta, KNsin for each waterline step at a given angle.Return a list of dict"""
+def computeKNatAngle(hydrotable:list,angle:float)->list:
+    '''Compute C0C1, d, Hmeta, KNsin for each waterline step at a given angle.Return a list of dict'''
 
     KNdatas=[]
     for wl_data in hydrotable:
@@ -389,12 +453,13 @@ def computeKNatAngle(hull:dict,hydrotable:list,angle:float)->list:
     return KNdatas
 
 
-def computeKNdatas(hull:dict,hydrotable:list,deltaAngle:float,maxAngle:float)->list:
+def computeKNdatas(hydrotable:list)->list:
     """Compute Volume, Zc, Hmeta, KN for each waterline step and each angle.Return a list of dict"""
     KNdatas =[]
     angle = 0.00001
-    while angle <= maxAngle:
-        KNdatas.extend(computeKNatAngle(hull,hydrotable,angle))
+    angle = 5.0
+    while angle <= maxAngle +  0.00001:
+        KNdatas.extend(computeHydroAtAngle(hydrotable,angle))
         angle += deltaAngle 
 
     return KNdatas
@@ -427,11 +492,11 @@ def formatKNtables(KNdatas:dict)->dict:
 
 def computeDatas(datas:dict)->dict:
     
-    print('Starting Hydrostatic Computation with', len(datas['hullDatas']), 'cross sections from', datas['deltaWl'],'m to',datas['maxWl'],'m')
-    hydrotable = computeHydroTable(datas['hullDatas'],datas['deltaWl'],datas['maxWl'],datas['d_sw'])
+    print('Starting Hydrostatic Computation with', len(hullDatas), 'cross sections from', deltaWl,'m to',maxWl,'m')
+    hydrotable = computeHydroTable()
 
     print('*** Starting KN Computation from 0° to', datas['maxAngle'],'° steps of',datas['deltaAngle'],'° ***')
-    KNdatas = computeKNdatas(datas['hullDatas'],hydrotable,datas['deltaAngle'],datas['maxAngle'])
+    KNdatas = computeKNdatas(hydrotable)
 
     KNobject = formatKNtables(KNdatas)
 
@@ -474,6 +539,14 @@ def notes(args:dict)->list:
     return datas
 
 # *********** Entry point ***************
+hullDatas = None
+maxWl = None
+deltaWl = None
+maxAngle = None
+deltaAngle = None
+d_sw = None
+minMax = None
+
 print('Workbook shall contain a sheet "Input" with the named range:')
 print('tbl_Hullform (half hull), max_wl, Δwl, φMax, Δφ, ρsw')
 print('All data shall be x: longitudinal forward y: transveral starboard z: vertical upward')

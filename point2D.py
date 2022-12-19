@@ -38,8 +38,8 @@ class Point2D:
         return self.x * other.x + self.y * other.y
 
     def distanceFromOrigin(self):
-        origin = Point2D(0, 0)
-        dist = self.distanceFromPoint(self, origin)
+        origin = Point2D(0.0, 0.0)
+        dist = self.distanceTo(origin)
         return dist
   
     def distanceTo(self, other):
